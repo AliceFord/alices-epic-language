@@ -152,11 +152,14 @@ def if_statement(condition, jmpFunc, varMemoryPositions):
     return rval
 
 
-def push_arg(arg):  # pushes the argument and moves rax to its position on the stack
+def handle_arg(arg, push=False):  # pushes the argument and moves rax to its position on the stack
     global textSection
     if arg["type"] == "int":
-        textSection += b"\x6a" + int(arg["value"]).to_bytes(1, byteorder="little") # push
-        textSection += b"\x48\x89\xe0"  # mov rax, rsp
+        if push:
+            textSection += b"\x6a" + int(arg["value"]).to_bytes(1, byteorder="little") # push
+            textSection += b"\x48\x89\xe0"  # mov rax, rsp
+        else:
+            textSection += b"\x48\xc7\xc0" + int(arg["value"]).to_bytes(4, byteorder="little")  # mov rax, {val}
     elif arg["type"] == "var":
         textSection += b"\x48\x89\xE0"  # mov rax, rsp
 
@@ -164,7 +167,15 @@ def push_arg(arg):  # pushes the argument and moves rax to its position on the s
         if addAmount > 0:
             textSection += b"\x48\x83\xc0" + int(addAmount).to_bytes(1, byteorder="little") # add rax, {addAmount}
         
-        textSection += b"\xff\x30"  # push [rax]
+        if push:
+            textSection += b"\xff\x30"  # push [rax]
+
+def set_rbx_to_var_loc(varname):
+    global textSection
+    textSection += b"\x48\x89\xe3"  # mov rbx, rsp
+    addAmount = varMemoryPositions[varname]
+    if addAmount > 0:
+        textSection += b"\x48\x83\xc3" + int(addAmount).to_bytes(1, byteorder="little") # add rbx, {addAmount}
 
 
 varMemoryPositions = {}
@@ -235,7 +246,7 @@ def main():
         elif ins["type"] == InstructionTypes.FunctionCall:
             if ins["fname"] == "putc":
                 if len(ins["args"]) > 1: raise Exception(f"[{linenum}] Too many arguments for builtin function `putc`")
-                push_arg(ins["args"][0])
+                handle_arg(ins["args"][0], push=True)
                 textSection += b"\x48\x89\xc6"  # mov rsi, rax
                 textSection += b"\xB8\x01\x00\x00\x00"  # mov rax, 1
                 textSection += b"\xBF\x01\x00\x00\x00"  # mov rdi, 1
@@ -244,7 +255,7 @@ def main():
                 textSection += b"\x0F\x05"  # syscall
                 textSection += b"\x58"  # pop rax
             elif ins["fname"] == "mod":
-                # push_arg(ins["args"][0])
+                # handle_arg(ins["args"][0])
                 # textSection += b"\x48\x8b\x00"  # mov rax, [rax]
                 # if ins["args"][0]["type"] == "int":
                 #     textSection += b"\x48\xc7\xc0" + int(ins["args"][0]["value"]).to_bytes(4, byteorder="little") # mov rax, {val}
@@ -272,7 +283,7 @@ def main():
                 textSection += if_statement(ins["args"][0], lambda addLen: addLen.to_bytes(1, byteorder="little"), varMemoryPositions)
                 ifBlocks[ins["fname"]] = (ins["args"][0], len(textSection))
             else:  # custom function call
-                for i, arg in enumerate(ins["args"]):
+                for i, arg in enumerate(ins["args"]):  # todo: not just for int value (use handle_arg)
                     textSection += b"\x6a" + int(arg["value"]).to_bytes(1, byteorder="little")  # push
                     # create variable
                 textSection += b"\xe8" + (0xffffffff - len(textSection) - functionDefBlocks[ins["fname"]]).to_bytes(4, byteorder="little")  # call {func}
@@ -281,19 +292,18 @@ def main():
         elif ins["type"] == InstructionTypes.VariableDef:
             if ins["vartype"] == "i8":
                 varTypes[ins["name"]] = ins["vartype"]
-                push_arg(ins["contents"])
-                textSection += b"\x50" # push rax
+                handle_arg(ins["contents"], push=True)
+                #textSection += b"\x50" # push rax
                 varMemoryPositions[ins["name"]] = 0
                 varMemoryPositions = increaseVarMemoryPosition(varMemoryPositions, ins["name"], 8)
                 memPointer += 8
         elif ins["type"] == InstructionTypes.VariableMod:
             if varTypes[ins["name"]] == "i8":
                 if ins["contents"]["type"] == "int":
-                    textSection += b"\x48\x89\xe0"  # mov rax, rsp
-                    addAmount = varMemoryPositions[ins["name"]]
-                    if addAmount > 0:
-                        textSection += b"\x48\x83\xc0" + int(addAmount).to_bytes(1, byteorder="little") # add rax, {addAmount}
-                    textSection += b"\x66\xc7\x00" + int(ins["contents"]["value"]).to_bytes(2, byteorder="little")  # mov word [rax], {val}
+                    set_rbx_to_var_loc(ins["name"])
+                    handle_arg(ins["contents"])
+                    textSection += b"\x48\x89\x03"  # mov [rbx], rax
+                    #textSection += b"\x66\xc7\x00" + int(ins["contents"]["value"]).to_bytes(2, byteorder="little")  # mov word [rax], {val}
         elif ins["type"] == InstructionTypes.VariableOperatorPlusEquals:
             if varTypes[ins["name"]] == "i8":
                 if ins["contents"]["type"] == "int":
@@ -301,7 +311,7 @@ def main():
                     addAmount = varMemoryPositions[ins["name"]]
                     if addAmount > 0:
                         textSection += b"\x48\x83\xc0" + int(addAmount).to_bytes(1, byteorder="little") # add rax, {addAmount}
-                    textSection += b"\x66\x83\x00" + int(ins["contents"]["value"]).to_bytes(1, byteorder="little")  # mov word [rax], {val}
+                    textSection += b"\x66\x83\x00" + int(ins["contents"]["value"]).to_bytes(1, byteorder="little")  # add word [rax], {val}
 
     print(varMemoryPositions)
     headerSection = b""
