@@ -1,11 +1,13 @@
-i8 f: i8 g -> {;
-    g += 1;
-    return g;
-}f;
+i8 itoa: i8 n -> {;
+    i8 r = 0;
+    while a(n > 0) {;
+        r = mod(n, 10);
+        r += 48;
+        putc(r);
+        n = div(n, 10);
+    }while a;
+}itoa;
 
 0 main: -> {;
-    i8 n = 0;
-    n += 48;
-    n = f(n);
-    putc(n);
+    itoa(17);
 }main
