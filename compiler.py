@@ -10,6 +10,7 @@ class InstructionTypes(enum.Enum):
     VariableDef = 4
     VariableMod = 5
     VariableOperatorPlusEquals = 6
+    ReturnFromFunc = 7
 
 
 def parseLine(line):
@@ -85,6 +86,13 @@ def parseLine(line):
             "type": InstructionTypes.FunctionEnd,
             "fname": line[1:]
         }
+    
+    elif line.startswith("return"):
+        line = line[6:]
+        return {
+            "type": InstructionTypes.ReturnFromFunc,
+            "contents": parseLiteral(line)
+        }
 
 
 def parseLiteral(arg):
@@ -109,10 +117,12 @@ def parseLiteral(arg):
         return {"type": "operation", "optype": result.group(2), "v1": parseLiteral(result.group(1)), "v2": parseLiteral(result.group(3))}
     if (result := re.match(logicalExpr, arg)) is not None:
         return {"type": "logical_op", "optype": result.group(2), "v1": parseLiteral(result.group(1)), "v2": parseLiteral(result.group(3))}
-    if (result := re.match(functionExpr, arg)) is not None:  # todo: fix this
-        args = ""
-        for arg in result.group(2).split(","):
-            pass
+    if (result := re.match(functionExpr, arg)) is not None:
+        argsParsed = []
+        for currentArg in result.group(2).split(","):
+            argsParsed.append(parseLiteral(currentArg))
+        
+        return {"type": "func", "fname": result.group(1), "args": argsParsed}
 
 
 def increaseVarMemoryPosition(positions: dict, ignore, increaseAmount):
@@ -166,7 +176,19 @@ def handle_arg(arg, push=False):  # pushes the argument and moves rax to its pos
         addAmount = varMemoryPositions[arg["value"]]
         if addAmount > 0:
             textSection += b"\x48\x83\xc0" + int(addAmount).to_bytes(1, byteorder="little") # add rax, {addAmount}
+
+        textSection += b"\x48\x8b\x00"  # mov rax, [rax]
+        if push:
+            textSection += b"\x50"  # push rax
+    elif arg["type"] == "func":
+        for funcArg in arg["args"]:
+            handle_arg(funcArg, push=True)  # push
+
+        textSection += b"\xe8" + (0xffffffff - len(textSection) - functionDefBlocks[arg["fname"]]).to_bytes(4, byteorder="little")  # call {func}
+        for funcArg in arg["args"]:
+            textSection += b"\x58"  # pop rax
         
+        textSection += b"\x48\x89\xd0"  # mov rax, rdx
         if push:
             textSection += b"\xff\x30"  # push [rax]
 
@@ -190,7 +212,7 @@ textSection = b""
 
 def main():
     global varMemoryPositions, varTypes, whileBlocks, ifBlocks, functionDefBlocks, functionArgs, memPointer, textSection
-    with open("test.tpl") as f:
+    with open("itoa.tpl") as f:
         code = f.read()
 
     code = code.replace("\n", "").replace(" ", "")
@@ -217,11 +239,12 @@ def main():
                 textSection = b"\xeb" + (len(textSection)).to_bytes(1, byteorder="little") + textSection  # add jump to main function
                 for block in functionDefBlocks.keys():
                     functionDefBlocks[block] += 2
-            else:
+            else:  # custom function
                 functionDefBlocks[ins["fname"]] = len(textSection)
                 functionArgs[ins["fname"]] = ins["args"]
 
                 for arg in ins["args"]:
+                    varTypes[arg["varname"]] = arg["rtype"]
                     varMemoryPositions[arg["varname"]] = 8
                     varMemoryPositions = increaseVarMemoryPosition(varMemoryPositions, arg["varname"], 8)
         elif ins["type"] == InstructionTypes.FunctionEnd:
@@ -247,7 +270,7 @@ def main():
             if ins["fname"] == "putc":
                 if len(ins["args"]) > 1: raise Exception(f"[{linenum}] Too many arguments for builtin function `putc`")
                 handle_arg(ins["args"][0], push=True)
-                textSection += b"\x48\x89\xc6"  # mov rsi, rax
+                textSection += b"\x48\x89\xe6"  # mov rsi, rsp
                 textSection += b"\xB8\x01\x00\x00\x00"  # mov rax, 1
                 textSection += b"\xBF\x01\x00\x00\x00"  # mov rdi, 1
                 textSection += b"\xBA\x01\x00\x00\x00"  # mov rdx, 1 ;
@@ -283,12 +306,12 @@ def main():
                 textSection += if_statement(ins["args"][0], lambda addLen: addLen.to_bytes(1, byteorder="little"), varMemoryPositions)
                 ifBlocks[ins["fname"]] = (ins["args"][0], len(textSection))
             else:  # custom function call
-                for i, arg in enumerate(ins["args"]):  # todo: not just for int value (use handle_arg)
-                    textSection += b"\x6a" + int(arg["value"]).to_bytes(1, byteorder="little")  # push
-                    # create variable
+                for arg in ins["args"]:
+                    handle_arg(arg, push=True)  # push
+
                 textSection += b"\xe8" + (0xffffffff - len(textSection) - functionDefBlocks[ins["fname"]]).to_bytes(4, byteorder="little")  # call {func}
                 for arg in ins["args"]:
-                    textSection += b"\x58"  # pop
+                    textSection += b"\x58"  # pop rax
         elif ins["type"] == InstructionTypes.VariableDef:
             if ins["vartype"] == "i8":
                 varTypes[ins["name"]] = ins["vartype"]
@@ -299,19 +322,20 @@ def main():
                 memPointer += 8
         elif ins["type"] == InstructionTypes.VariableMod:
             if varTypes[ins["name"]] == "i8":
-                if ins["contents"]["type"] == "int":
-                    set_rbx_to_var_loc(ins["name"])
-                    handle_arg(ins["contents"])
-                    textSection += b"\x48\x89\x03"  # mov [rbx], rax
-                    #textSection += b"\x66\xc7\x00" + int(ins["contents"]["value"]).to_bytes(2, byteorder="little")  # mov word [rax], {val}
+                
+                handle_arg(ins["contents"])
+                set_rbx_to_var_loc(ins["name"])
+                textSection += b"\x48\x89\x03"  # mov [rbx], rax
         elif ins["type"] == InstructionTypes.VariableOperatorPlusEquals:
             if varTypes[ins["name"]] == "i8":
                 if ins["contents"]["type"] == "int":
-                    textSection += b"\x48\x89\xe0"  # mov rax, rsp
-                    addAmount = varMemoryPositions[ins["name"]]
-                    if addAmount > 0:
-                        textSection += b"\x48\x83\xc0" + int(addAmount).to_bytes(1, byteorder="little") # add rax, {addAmount}
-                    textSection += b"\x66\x83\x00" + int(ins["contents"]["value"]).to_bytes(1, byteorder="little")  # add word [rax], {val}
+                    set_rbx_to_var_loc(ins["name"])
+                    handle_arg(ins["contents"])
+                    textSection += b"\x48\x01\x03"  # add [rbx], rax
+        elif ins["type"] == InstructionTypes.ReturnFromFunc:
+            # todo: use return type of function for something
+            handle_arg(ins["contents"])
+            textSection += b"\x48\x89\xc2"  # mov rdx, rax
 
     print(varMemoryPositions)
     headerSection = b""

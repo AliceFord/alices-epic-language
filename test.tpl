@@ -8,7 +8,7 @@
     putc('d');
     while1(c <= '9') {;
         if1 (c == '5') {;
-            f1('a');
+            f1(c);
         }if1;
         putc(c);
         c += 1;
