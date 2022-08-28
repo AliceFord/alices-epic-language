@@ -237,7 +237,11 @@ def main():
 
     code = code.replace("\n", "").replace(" ", "")
     code = code.split(";")
-    print(code)
+    newCode = []
+    for line in code:
+        if not line.startswith("#"):
+            newCode.append(line)
+    print(newCode)
 
     
     ### TOKENISE FIRST :)
@@ -245,7 +249,7 @@ def main():
 
     instructions = []
 
-    for linenum, line in enumerate(code):
+    for linenum, line in enumerate(newCode):
         linenum = linenum + 1
         instructions.append(parseLine(line))
         

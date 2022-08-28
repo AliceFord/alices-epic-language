@@ -1,13 +1,15 @@
 i8 itoa: i8 n -> {;
+    i8 p = n;
     i8 r = 0;
-    while a(n > 0) {;
-        r = mod(n, 10);
+    whilea(p > 0) {;
+        r = p;
+        #r = mod(p, 10);
         r += 48;
         putc(r);
-        n = div(n, 10);
-    }while a;
+        p = div(p, 10);
+    }whilea;
 }itoa;
 
 0 main: -> {;
-    itoa(17);
+    itoa(10);
 }main
