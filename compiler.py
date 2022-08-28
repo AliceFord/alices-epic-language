@@ -232,7 +232,7 @@ textSection = b""
 
 def main():
     global varMemoryPositions, varTypes, whileBlocks, ifBlocks, functionDefBlocks, functionArgs, memPointer, textSection
-    with open("itoa.tpl") as f:
+    with open("test.tpl") as f:
         code = f.read()
 
     code = code.replace("\n", "").replace(" ", "")
@@ -367,6 +367,8 @@ def main():
 
     ## FILE HEADER
 
+    #textSection = b"\xB8\x3C\x00\x00\x00\x48\x31\xFF\x0F\x05"  # TODO: remove this obviously
+
     headerSection += b"\x7fELF"  # magic number
     headerSection += b"\x02"  # 64-bit mode
     headerSection += b"\x01"  # little endian
@@ -379,7 +381,7 @@ def main():
     headerSection += b"\x01\x00\x00\x00"  # v1 of elf
     headerSection += b"\x80\x00\x40\x00\0\0\0\0"  # memory entry point
     headerSection += b"\x40\0\0\0\0\0\0\0"  # start of header table (end of this header)
-    headerSection += b"\x98\x01\0\0\0\0\0\0"  # start of section header table #TODO: move this somewhere smart
+    headerSection += b"\0\0\0\0\0\0\0\0"  # start of section header table (this is moved later)
     headerSection += b"\0\0\0\0"  # flags
     headerSection += b"\x40\x00"  # header size (64 bytes)
     headerSection += b"\x38\x00"  # size of program header table entry
@@ -401,11 +403,161 @@ def main():
     headerSection += b"\0\0\0\0\0\0\0\0"  # idk what this padding is for, probably alignment or smth
 
 
-    # TODO: sections
+    ## PROGRAM DATA AND PADDING
+
+
+    fileData = headerSection + textSection
+    fileData += b"\0" * (16 - (len(fileData) % 16))
+
+
+    ## SYMBOL TABLE
+
+    # 0
+    fileData += b"\0\0\0\0"  # .shstrtab string offset
+    fileData += b"\0"  # info (none)
+    fileData += b"\0"  # other
+    fileData += b"\0\0"  # meaning of symbol (no meaning)
+    fileData += b"\0\0\0\0\0\0\0\0"  # value (load location)
+    fileData += b"\0\0\0\0\0\0\0\0"  # size (unused)
+
+    # 1
+    fileData += b"\0\0\0\0"  # .shstrtab string offset
+    fileData += b"\x03"  # info (section)
+    fileData += b"\0"  # other
+    fileData += b"\x01\0"  # meaning of symbol (idk)
+    fileData += b"\x80\x00\x40\x00\0\0\0\0"  # value (load location)
+    fileData += b"\0\0\0\0\0\0\0\0"  # size (unused)
+
+    # 2
+    fileData += b"\x01\0\0\0"  # .shstrtab string offset (main.asm)
+    fileData += b"\x04"  # info (file)
+    fileData += b"\0"  # other
+    fileData += b"\xf1\xff"  # meaning of symbol (absolute)
+    fileData += b"\0\0\0\0\0\0\0\0"  # value (load location)
+    fileData += b"\0\0\0\0\0\0\0\0"  # size (unused)
+
+    # 3
+    fileData += b"\x0f\0\0\0"  # .shstrtab string offset (_start)
+    fileData += b"\x10"  # info (global notype)
+    fileData += b"\0"  # other
+    fileData += b"\x01\0"  # meaning of symbol (idk)
+    fileData += b"\x80\0\x40\0\0\0\0\0"  # value (load location)
+    fileData += b"\0\0\0\0\0\0\0\0"  # size (unused)
+
+    # 4
+    fileData += b"\x0a\0\0\0"  # .shstrtab string offset (__bss_start)
+    fileData += b"\x10"  # info (global notype)
+    fileData += b"\0"  # other
+    fileData += b"\x01\0"  # meaning of symbol (idk)
+    fileData += b"\x8a\0\x60\0\0\0\0\0"  # value (load location)
+    fileData += b"\0\0\0\0\0\0\0\0"  # size (unused)
+
+    # 5
+    fileData += b"\x16\0\0\0"  # .shstrtab string offset (_edata)
+    fileData += b"\x10"  # info (global notype)
+    fileData += b"\0"  # other
+    fileData += b"\x01\0"  # meaning of symbol (idk)
+    fileData += b"\x8a\0\x60\0\0\0\0\0"  # value (load location)
+    fileData += b"\0\0\0\0\0\0\0\0"  # size (unused)
+
+    # 6
+    fileData += b"\x1d\0\0\0"  # .shstrtab string offset (_end)
+    fileData += b"\x10"  # info (global notype)
+    fileData += b"\0"  # other
+    fileData += b"\x01\0"  # meaning of symbol (idk)
+    fileData += b"\x90\0\x60\0\0\0\0\0"  # value (load location)
+    fileData += b"\0\0\0\0\0\0\0\0"  # size (unused)
+
+
+    ## SYMBOL TABLE
+
+    fileData += b"\0"
+    fileData += b"main.asm\0"
+    fileData += b"__bss_start\0"
+    fileData += b"_edata\0"
+    fileData += b"_end\0"
+
+    
+    ## SECTION STRING TABLE
+
+    fileData += b"\0"
+    fileData += b".symtab\0"
+    fileData += b".strtab\0"
+    fileData += b".shstrtab\0"
+    fileData += b".text\0"
+    fileData += b"\0" * (16 - (len(fileData) % 16))  # padding
+
+
+    ## SECTION HEADER TABLE
+
+
+    fileData = fileData[:40] + len(fileData).to_bytes(8, byteorder="little") + fileData[48:]  # set offset
+    
+    # 0
+    fileData += b"\0\0\0\0"  # .shstrtab offset (none)
+    fileData += b"\0\0\0\0"  # type = NULL
+    fileData += b"\0\0\0\0\0\0\0\0"  # attributes = none
+    fileData += b"\0\0\0\0\0\0\0\0"  # virtual address
+    fileData += b"\0\0\0\0\0\0\0\0"  # offset of section in file
+    fileData += b"\0\0\0\0\0\0\0\0"  # size of section in file
+    fileData += b"\0\0\0\0"  # section index
+    fileData += b"\0\0\0\0"  # extra info
+    fileData += b"\0\0\0\0\0\0\0\0"  # alignment of section
+    fileData += b"\0\0\0\0\0\0\0\0"  # size of each entry
+
+    # 1
+    fileData += b"\x1b\0\0\0"  # .shstrtab offset (.text)
+    fileData += b"\x01\0\0\0"  # type = program bits
+    fileData += b"\x06\0\0\0\0\0\0\0"  # attributes = alloc | exec
+    fileData += b"\x80\0\x40\0\0\0\0\0"  # virtual address
+    fileData += b"\x80\0\0\0\0\0\0\0"  # offset of section in file
+    fileData += len(textSection).to_bytes(8, byteorder="little")  # size of section in file #TODO: this
+    fileData += b"\0\0\0\0"  # section index
+    fileData += b"\0\0\0\0"  # extra info
+    fileData += b"\x10\0\0\0\0\0\0\0"  # alignment of section
+    fileData += b"\0\0\0\0\0\0\0\0"  # size of each entry
+
+    startOfSymtab = (len(textSection) + 0x80 + (16 - (len(fileData) % 16)))
+
+    # 2
+    fileData += b"\x01\0\0\0"  # .shstrtab offset (.symtab)
+    fileData += b"\x02\0\0\0"  # type = SYMTAB
+    fileData += b"\0\0\0\0\0\0\0\0"  # attributes = none
+    fileData += b"\0\0\0\0\0\0\0\0"  # virtual address
+    fileData += startOfSymtab.to_bytes(8, byteorder="little")  # offset of section in file
+    fileData += b"\xa8\0\0\0\0\0\0\0"  # size of section in file
+    fileData += b"\x03\0\0\0"  # section index
+    fileData += b"\x03\0\0\0"  # extra info
+    fileData += b"\x08\0\0\0\0\0\0\0"  # alignment of section
+    fileData += b"\x18\0\0\0\0\0\0\0"  # size of each entry
+
+    # 3
+    fileData += b"\x09\0\0\0"  # .shstrtab offset (.strtab)
+    fileData += b"\x03\0\0\0"  # type = STRTAB
+    fileData += b"\0\0\0\0\0\0\0\0"  # attributes = none
+    fileData += b"\0\0\0\0\0\0\0\0"  # virtual address
+    fileData += (startOfSymtab + 0xa8).to_bytes(8, byteorder="little")  # offset of section in file
+    fileData += b"\x22\0\0\0\0\0\0\0"  # size of section in file
+    fileData += b"\0\0\0\0"  # section index
+    fileData += b"\0\0\0\0"  # extra info
+    fileData += b"\x01\0\0\0\0\0\0\0"  # alignment of section
+    fileData += b"\0\0\0\0\0\0\0\0"  # size of each entry
+
+    # 4
+    fileData += b"\x11\0\0\0"  # .shstrtab offset (.shstrtab)
+    fileData += b"\x03\0\0\0"  # type = STRTAB
+    fileData += b"\0\0\0\0\0\0\0\0"  # attributes = none
+    fileData += b"\0\0\0\0\0\0\0\0"  # virtual address
+    fileData += (startOfSymtab + 0xca).to_bytes(8, byteorder="little")  # offset of section in file
+    fileData += b"\x21\0\0\0\0\0\0\0"  # size of section in file
+    fileData += b"\0\0\0\0"  # section index
+    fileData += b"\0\0\0\0"  # extra info
+    fileData += b"\x01\0\0\0\0\0\0\0"  # alignment of section
+    fileData += b"\0\0\0\0\0\0\0\0"  # size of each entry
 
 
     with open("compiled", "wb") as f:
-        f.write(headerSection + textSection)
+        f.write(fileData)
 
 
     #print(binascii.hexlify(bytearray(textSection)))
