@@ -7,6 +7,6 @@ i8 f1: i8 char -> {;
     i8 a = 5;
     i8 b = 6;
     ifa(a < b) {;
-        putc(f1('y'));
+        putc('y');
     }ifa;
 }main
