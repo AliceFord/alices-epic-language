@@ -127,16 +127,21 @@ def parseLiteral(arg):
 
 
 def increaseVarMemoryPosition(ignore, increaseAmount):
-    global varMemoryPositions
+    global varMemoryPositions, scopes
     print(ignore)
-    for k, v in varMemoryPositions.items():
-        if k != currentFunc + ignore and k.startswith(currentFunc):
-            varMemoryPositions[k] += increaseAmount
+    # for k, v in varMemoryPositions.items():
+    #     if k != scopes[-1] + ignore and k.startswith(scopes[-1]):
+    #         varMemoryPositions[k] += increaseAmount
 
+    # return varMemoryPositions
+    for k, v in varMemoryPositions.items():
+        if not k.endswith(ignore):
+            varMemoryPositions[k] += increaseAmount
+    
     return varMemoryPositions
 
 
-def if_statement(condition, jmpFunc):
+def if_statement(condition, jmpFunc, doPop=False):
     global varMemoryPositions, currentFunc
     rval = b""
     if condition["type"] != "logical_op": raise Exception("While loop should be run with logical operator")
@@ -151,6 +156,20 @@ def if_statement(condition, jmpFunc):
     rval += b"\x48\x89\xc3"  # mov rbx, rax
     rval += handle_arg(condition["v2"], ret=True)
     rval += b"\x48\x39\xc3"  # cmp rbx, rax
+
+    # Pop variables just before jump
+    if doPop:
+        toRemove = []
+        for memPos in varMemoryPositions.keys():
+            if memPos.startswith(scopes[-1]):
+                rval += b"\x58"  # pop rax
+                toRemove.append(memPos)
+
+        for pos in toRemove:
+            del varMemoryPositions[pos]
+
+        scopes.pop()
+
     if condition["optype"] == "<":
         rval += b"\x0f\x8c"  # jl
     elif condition["optype"] == "<=":
@@ -179,8 +198,15 @@ def divide_base(arg):
     textSection += b"\x48\xf7\xf3"  # div rbx
 
 
+def getVarLocation(varname):
+    global varMemoryPositions
+    for var in varMemoryPositions.keys():
+        if var.endswith(varname):
+            return varMemoryPositions[var]
+
+
 def handle_arg(arg, push=False, ret=None):  # pushes the argument and moves rax to its position on the stack
-    global textSection
+    global textSection, scopes
     output = b""
     if arg["type"] == "int":
         if push:
@@ -191,7 +217,7 @@ def handle_arg(arg, push=False, ret=None):  # pushes the argument and moves rax 
     elif arg["type"] == "var":
         output += b"\x48\x89\xE0"  # mov rax, rsp
 
-        addAmount = varMemoryPositions[currentFunc + arg["value"]]
+        addAmount = getVarLocation(arg["value"])
         if addAmount > 0:
             output += b"\x48\x83\xc0" + int(addAmount).to_bytes(1, byteorder="little") # add rax, {addAmount}
 
@@ -228,7 +254,7 @@ def handle_arg(arg, push=False, ret=None):  # pushes the argument and moves rax 
 def set_rbx_to_var_loc(varname):
     global textSection
     textSection += b"\x48\x89\xe3"  # mov rbx, rsp
-    addAmount = varMemoryPositions[currentFunc + varname]
+    addAmount = getVarLocation(varname)
     if addAmount > 0:
         textSection += b"\x48\x83\xc3" + int(addAmount).to_bytes(1, byteorder="little") # add rbx, {addAmount}
 
@@ -241,6 +267,7 @@ functionDefBlocks = {}
 functionArgs = {}
 memPointer = 0  # in bits
 currentFunc = ""
+scopes = []
 
 textSection = b""
 
@@ -274,6 +301,7 @@ def main():
     for ins in instructions:
         if ins["type"] == InstructionTypes.FunctionStart:
             currentFunc = ins["fname"] + "_"
+            scopes.append(ins["fname"] + "_")
 
             if ins["fname"] == "main":
                 textSection = b"\xe9" + (len(textSection)).to_bytes(4, byteorder="little") + textSection  # add jump to main function
@@ -293,14 +321,28 @@ def main():
             elif ins["fname"].startswith("while"):
                 print(whileBlocks)
 
+                
+
                 condition = whileBlocks[ins["fname"]][0]
                 #textSection += (0xff - len(textSection) -  int(whileBlocks[ins["fname"]][1]) + 4).to_bytes(1, byteorder="little")
-                print(hex(len(textSection)), hex(int(whileBlocks[ins["fname"]][1])))
-                textSection += if_statement(condition, lambda addLen: (0xffffffff - addLen - len(textSection) + int(whileBlocks[ins["fname"]][1]) - 3).to_bytes(4, byteorder="little"))
+                textSection += if_statement(condition, lambda addLen: (0xffffffff - addLen - len(textSection) + int(whileBlocks[ins["fname"]][1]) - 3).to_bytes(4, byteorder="little"), doPop=True)
+
+                
             elif ins["fname"].startswith("if"):
                 print(ifBlocks)
 
                 textSection = textSection[:ifBlocks[ins["fname"]][1] - 4] + (len(textSection) - ifBlocks[ins["fname"]][1]).to_bytes(4, byteorder="little") + textSection[ifBlocks[ins["fname"]][1]:]
+
+                toRemove = []
+                for memPos in varMemoryPositions.keys():
+                    if memPos.startswith(scopes[-1]):
+                        textSection += b"\x58"  # pop rax
+                        toRemove.append(memPos)
+
+                for pos in toRemove:
+                    del varMemoryPositions[pos]
+
+                scopes.pop()
             else:  # it is a custom function definition
                 for arg in functionArgs[ins["fname"]]:
                     toRemove = []
@@ -316,6 +358,8 @@ def main():
 
                     for pos in toRemove:
                         del varMemoryPositions[pos]
+                
+                scopes.pop()
 
                 textSection += b"\xc3"  # ret
         elif ins["type"] == InstructionTypes.FunctionCall:
@@ -331,6 +375,7 @@ def main():
                 textSection += b"\x58"  # pop rax
             elif ins["fname"].startswith("while"):
                 whileBlocks[ins["fname"]] = (ins["args"][0], len(textSection))  # condition for loop continuation and where to jump to
+                scopes.append(ins["fname"] + "_")
             elif ins["fname"].startswith("if"):
                 # Jump if condition is NOT true (swap condition to opposite and jump if true)
                 if ins["args"][0]["optype"] == "==":
@@ -347,6 +392,8 @@ def main():
                     ins["args"][0]["optype"] = ">"
                 textSection += if_statement(ins["args"][0], lambda addLen: addLen.to_bytes(4, byteorder="little"))
                 ifBlocks[ins["fname"]] = (ins["args"][0], len(textSection))
+
+                scopes.append(ins["fname"] + "_")
             else:  # custom function call
                 for arg in ins["args"]:
                     handle_arg(arg, push=True)  # push
@@ -359,7 +406,7 @@ def main():
                 varTypes[ins["name"]] = ins["vartype"]
                 handle_arg(ins["contents"], push=True)
 
-                varMemoryPositions[currentFunc + ins["name"]] = 0
+                varMemoryPositions[scopes[-1] + ins["name"]] = 0
                 varMemoryPositions = increaseVarMemoryPosition(ins["name"], 8)
                 memPointer += 8
         elif ins["type"] == InstructionTypes.VariableMod:
